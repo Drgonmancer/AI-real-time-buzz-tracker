@@ -1,0 +1,107 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                String         @id @default(cuid())
+  username          String         @unique
+  apiKey            String?
+  email             String?
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+
+  keywordGroups     KeywordGroup[]
+  notificationPrefs NotificationPref[]
+
+  @@map("users")
+}
+
+model KeywordGroup {
+  id        String    @id @default(cuid())
+  name      String
+  isActive  Boolean   @default(true)
+  weight    Float     @default(1.0)
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  keywords  Keyword[]
+  createdAt DateTime  @default(now())
+
+  @@unique([userId, name])
+  @@map("keyword_groups")
+}
+
+model Keyword {
+  id      String  @id @default(cuid())
+  word    String
+  weight  Float   @default(1.0)
+  groupId String
+  group   KeywordGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, word])
+  @@map("keywords")
+}
+
+model HotTopic {
+  id          String   @id @default(cuid())
+  title       String
+  content     String?
+  source      String
+  sourceUrl   String?
+  category    String?
+  metrics     String   @default("{}")
+  rank        Int?
+  hash        String   @unique
+  collectedAt DateTime @default(now())
+  createdAt   DateTime @default(now())
+
+  analysis    AiAnalysis?
+
+  @@index([source, collectedAt])
+  @@index([collectedAt])
+  @@index([category])
+  @@index([hash])
+  @@map("hot_topics")
+}
+
+model AiAnalysis {
+  id             String   @id @default(cuid())
+  topicId        String   @unique
+  topic          HotTopic @relation(fields: [topicId], references: [id], onDelete: Cascade)
+
+  relevanceScore Float?
+  scoreBreakdown String?
+  summary        String?
+  keyPoints      String   @default("[]")
+  sentiment      String?
+  isReal         Boolean  @default(true)
+  importance     String   @default("low")
+  prediction     String?
+  modelUsed      String   @default("deepseek-chat")
+  tokensUsed     Int      @default(0)
+  cost           Float    @default(0)
+  analyzedAt     DateTime @default(now())
+
+  @@index([topicId])
+  @@index([relevanceScore])
+  @@map("ai_analyses")
+}
+
+model NotificationPref {
+  id           String  @id @default(cuid())
+  userId       String
+  user         User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  enableBrowser Boolean @default(true)
+  enableDesktop Boolean @default(true)
+  minScore      Int     @default(70)
+  quietStart    String  @default("23:00")
+  quietEnd      String  @default("08:00")
+
+  @@unique([userId])
+  @@map("notification_prefs")
+}
