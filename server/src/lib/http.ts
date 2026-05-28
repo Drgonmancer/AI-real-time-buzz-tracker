@@ -114,7 +114,8 @@ export function initNetwork(): void {
 }
 
 /** Reddit API 要求唯一、可识别的 User-Agent，否则返回 403 */
-export const REDDIT_USER_AGENT = 'PulseHotMonitor/1.0 (Windows; Node.js; +https://github.com/pulse-hot-monitor)';
+export const REDDIT_USER_AGENT =
+  'PulseHotMonitor/1.0 (compatible; +https://github.com/Drgonmancer/AI-real-time-buzz-tracker)';
 
 export const DEFAULT_HEADERS: Record<string, string> = {
   'User-Agent':

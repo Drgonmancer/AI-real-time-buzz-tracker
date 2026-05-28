@@ -2,8 +2,9 @@
 
 | 文档 | 说明 |
 |------|------|
+| [换机部署](deployment.md) | **克隆到其他电脑、能力矩阵、零配置可用范围** |
 | [快速启动](quickstart.md) | Windows 一键启动、手动启动、验证步骤 |
-| [环境配置](configuration.md) | Node.js、`.env`、SQLite、DeepSeek、代理 |
+| [环境配置](configuration.md) | Node.js、`.env`、SQLite、DeepSeek（可选）、代理 |
 | [功能说明](features.md) | 当前已实现功能与数据源清单 |
 | [API 接口](api.md) | REST + WebSocket 接口 |
 | [架构与技术栈](architecture.md) | 目录结构、模块划分、技术选型 |
@@ -25,3 +26,14 @@
 - API 根路径：http://localhost:3000/api/v1
 
 > 若修改后端 `PORT`，需同步修改 `client/vite.config.ts` 中的 `proxy.target`。
+
+## 最小可用 vs 完整功能
+
+| 场景 | 需要配置 |
+|------|----------|
+| 国内热点 + Dashboard 搜索 | 默认 `.env` 即可 |
+| AI 分析 | `DEEPSEEK_API_KEY` |
+| Reddit / Google News | VPN 或 `HTTPS_PROXY` |
+| Twitter | `TWITTER_BEARER_TOKEN` |
+
+详见 [deployment.md](deployment.md)。

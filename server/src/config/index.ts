@@ -31,7 +31,7 @@ export const config = {
   },
 
   scraper: {
-    enabled: process.env.SCRAPER_ENABLED === 'true',
+    enabled: process.env.SCRAPER_ENABLED !== 'false',
     intervals: {
       baidu: parseInt(process.env.SCRAPER_INTERVAL_BAIDU || '300000', 10),
       weibo: parseInt(process.env.SCRAPER_INTERVAL_WEIBO || '300000', 10),

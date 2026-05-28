@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import prisma from '../lib/prisma';
+import { config } from '../config';
 import { analyzeHotTopic } from '../services/aiService';
 import { notifyAnalysisComplete } from '../socket';
 
@@ -12,6 +13,16 @@ const analysisTasks = new Map<
 
 aiAnalysisRouter.post('/analyze', async (req: Request, res: Response) => {
   try {
+    if (!config.deepseek.apiKey) {
+      return res.status(503).json({
+        success: false,
+        error: {
+          code: 'AI_NOT_CONFIGURED',
+          message: '未配置 DEEPSEEK_API_KEY，热点采集与搜索仍可用',
+        },
+      });
+    }
+
     const { topicIds, forceRefresh = false } = req.body;
 
     if (!topicIds || !Array.isArray(topicIds)) {

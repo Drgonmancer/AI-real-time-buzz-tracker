@@ -1,0 +1,19 @@
+{
+  "name": "ai-real-time-buzz-tracker",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Multi-platform AI hot topic monitor",
+  "scripts": {
+    "install:all": "npm install --prefix server && npm install --prefix client",
+    "db:setup": "npm run db:setup --prefix server",
+    "setup": "npm run install:all && npm run db:setup",
+    "dev:server": "npm run dev --prefix server",
+    "dev:client": "npm run dev --prefix client",
+    "test:sources": "npm run test:sources --prefix server",
+    "test:search": "npm run test:search --prefix server"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "license": "MIT"
+}

@@ -1,5 +1,26 @@
 # 测试与诊断
 
+## 新环境验收清单
+
+克隆到新机器后，按顺序验证：
+
+```bash
+# 1. 安装与数据库
+npm run setup
+
+# 2. 启动（双终端或 start.bat）
+npm run dev:server
+npm run dev:client
+
+# 3. 健康检查
+curl http://localhost:3000/health
+
+# 4. 爬虫（国内源应多数 OK，无需 API Key）
+cd server && npm run test:sources
+```
+
+预期：health 返回 `ok`；`test:sources` 中 baidu/weibo/bilibili 等国内源成功。
+
 ## 端口验证
 
 确认与文档一致：**后端 3000，前端 5173**。

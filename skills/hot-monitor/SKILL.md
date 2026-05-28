@@ -20,9 +20,9 @@ docs/            安装与测试文档
 
 ## 启动约定
 
-- **Windows 用户**：必须用 `start.bat`，它会调用 `scripts/*.ps1` 清理进程、按需生成 Prisma、启动 `server/run-dev.bat` 与 `client/run-dev.bat`
-- **不要**使用已删除的 `start.ps1`
-- Prisma EPERM：先 `stop.bat`，再 `start.bat`
+- **Windows**：使用根目录 `start.bat` / `stop.bat`；内部调用 `server/scripts/startup/*.ps1`
+- **macOS / Linux**：`bash scripts/setup.sh`，然后 `npm run dev:server` + `npm run dev:client`
+- Prisma EPERM（Windows）：先 `stop.bat`，再 `start.bat`
 
 ## 关键模块
 
@@ -57,9 +57,12 @@ npm run test:search
 
 ## 环境变量
 
-见 `server/.env.example`。必填：`DEEPSEEK_API_KEY`、`DATABASE_URL`。
+见 `server/.env.example`。
 
-国际源代理：`HTTPS_PROXY` 或 Windows 系统代理（自动检测）。
+- **必填**：`DATABASE_URL`（模板已含默认值）
+- **可选 AI**：`DEEPSEEK_API_KEY`（无则跳过 AI，热点仍可用）
+- **可选国际源**：`HTTPS_PROXY` 或 Windows 系统代理
+- **可选 Twitter**：`TWITTER_BEARER_TOKEN`
 
 ## 修改爬虫时注意
 
