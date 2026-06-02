@@ -7,6 +7,7 @@ import { Server } from 'socket.io';
 
 import { initNetwork } from './lib/http';
 import { config } from './config';
+import { initAiConfigFromDb } from './services/aiConfigService';
 import { errorHandler } from './middleware/errorHandler';
 import { notFoundHandler } from './middleware/notFound';
 import { hotTopicsRouter } from './routes/hotTopics';
@@ -64,8 +65,16 @@ if (config.scraper.enabled) {
 }
 
 const PORT = config.port;
-httpServer.listen(PORT, () => {
-  console.log(`
+
+async function startServer() {
+  try {
+    await initAiConfigFromDb();
+  } catch (error) {
+    console.error('[Startup] Failed to load AI config from database:', error);
+  }
+
+  httpServer.listen(PORT, () => {
+    console.log(`
   Pulse Server Started Successfully!
   
   HTTP API:     http://localhost:${PORT}
@@ -83,6 +92,9 @@ httpServer.listen(PORT, () => {
   
   Health Check: http://localhost:${PORT}/health
   `);
-});
+  });
+}
+
+startServer();
 
 export { app, io };

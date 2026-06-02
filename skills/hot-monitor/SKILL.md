@@ -41,7 +41,7 @@ docs/            安装与测试文档
 | 后端 | 3000 |
 | 前端 | 5173 |
 
-详见 [docs/README.md](../docs/README.md)。
+详见 [docs/快速启动说明.md](../docs/快速启动说明.md) 与 [docs/人工配置.md](../docs/人工配置.md)。
 
 ## 诊断命令
 

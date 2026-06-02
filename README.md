@@ -25,7 +25,7 @@ AI 热点监控与决策助手：聚合多平台热点，关键词跨平台搜�
 | `HTTPS_PROXY` 或系统 VPN | Reddit、Google News 等国际源 |
 | `TWITTER_BEARER_TOKEN` | Twitter 趋势与搜索 |
 
-详见 [docs/deployment.md](docs/deployment.md) 中的能力矩阵。
+详见 [docs/人工配置.md](docs/人工配置.md) 中的能力矩阵。
 
 ## 仓库结构
 
@@ -79,20 +79,17 @@ npm run setup                  # install:all + db:setup
 cp server/.env.example server/.env   # 可选：填入 DEEPSEEK_API_KEY
 ```
 
-更多细节见 [docs/quickstart.md](docs/quickstart.md)。
+更多细节见 [docs/快速启动说明.md](docs/快速启动说明.md)。
 
 ## 文档
 
 | 文档 | 说明 |
 |------|------|
-| [docs/README.md](docs/README.md) | 文档索引 |
-| [docs/deployment.md](docs/deployment.md) | **换机部署、能力矩阵、环境要求** |
-| [docs/quickstart.md](docs/quickstart.md) | 本地运行 |
-| [docs/configuration.md](docs/configuration.md) | 环境变量详解 |
-| [docs/features.md](docs/features.md) | 功能与数据源 |
-| [docs/api.md](docs/api.md) | API 接口 |
-| [docs/architecture.md](docs/architecture.md) | 架构说明 |
-| [docs/testing.md](docs/testing.md) | 测试与诊断 |
+| [docs/需求分析.md](docs/需求分析.md) | 功能需求与用户故事 |
+| [docs/技术实现方案.md](docs/技术实现方案.md) | 架构与模块设计 |
+| [docs/后端API接口.md](docs/后端API接口.md) | REST API 与 WebSocket |
+| [docs/快速启动说明.md](docs/快速启动说明.md) | 本地安装与启动 |
+| [docs/人工配置.md](docs/人工配置.md) | 环境变量与 Settings 配置 |
 
 ## License
 

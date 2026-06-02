@@ -1,10 +1,10 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { motion, stagger, useAnimate, useInView } from 'framer-motion';
 import { cn } from '../../lib/utils';
 
 /**
  * Aceternity UI — Text Generate Effect
- * 文字逐词淡入+模糊消除动画。
+ * filter=false 时直接显示文字，避免路由切换后 IntersectionObserver 未触发导致 opacity-0 黑屏
  */
 export function TextGenerateEffect({
   words,
@@ -18,26 +18,43 @@ export function TextGenerateEffect({
   duration?: number;
 }) {
   const [scope, animate] = useAnimate();
-  const isInView = useInView(scope);
+  const isInView = useInView(scope, { once: true, amount: 0.1 });
+  const mountedRef = useRef(true);
   const wordsArray = words.split(' ');
 
   useEffect(() => {
-    if (isInView) {
-      animate(
-        'span',
-        { opacity: 1, filter: filter ? 'blur(0px)' : 'none' },
-        { duration, delay: stagger(0.08) }
-      );
-    }
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!filter) return;
+    if (!isInView || !mountedRef.current) return;
+
+    void animate(
+      'span',
+      { opacity: 1, filter: 'blur(0px)' },
+      { duration, delay: stagger(0.08) }
+    );
   }, [isInView, animate, filter, duration]);
+
+  if (!filter) {
+    return (
+      <div className={cn('font-bold', className)}>
+        {words}
+      </div>
+    );
+  }
 
   return (
     <div ref={scope} className={cn('font-bold', className)}>
       {wordsArray.map((word, idx) => (
         <motion.span
-          key={idx}
+          key={`${word}-${idx}`}
           className="opacity-0"
-          style={{ filter: filter ? 'blur(10px)' : 'none' }}
+          style={{ filter: 'blur(10px)' }}
         >
           {word}{' '}
         </motion.span>

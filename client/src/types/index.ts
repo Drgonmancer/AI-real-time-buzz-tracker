@@ -72,6 +72,8 @@ export interface DataSource {
 export interface AiConfig {
   model: string;
   apiKeyStatus: 'valid' | 'invalid' | 'not_configured';
+  apiKeyConfigured?: boolean;
+  apiKeyHint?: string | null;
   dailyUsage: number;
   dailyLimit: number;
 }

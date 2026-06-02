@@ -1,9 +1,16 @@
 import { Outlet } from 'react-router-dom';
+import { useEffect } from 'react';
 import Sidebar from './Sidebar';
 import { Spotlight } from './ui/Spotlight';
 import { Meteors } from './ui/Meteors';
+import { prefetchSettings } from '../lib/settingsData';
 
 export default function Layout() {
+  // 应用稳定后后台预取设置页数据，首次点开设置更快
+  useEffect(() => {
+    const t = window.setTimeout(() => prefetchSettings(), 2500);
+    return () => clearTimeout(t);
+  }, []);
   return (
     <div className="flex min-h-screen bg-cyber-bg overflow-hidden">
       {/* Aceternity Spotlight — left-top glow */}

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Zap, Radio, RefreshCw, Bot, TrendingUp, Globe, BarChart2, AlertTriangle, Flame, Star, Clock, Search } from 'lucide-react';
 import { api } from '../lib/api';
 import { useWebSocket } from '../hooks/useWebSocket';
@@ -106,10 +106,14 @@ function FakeNewsWarning() {
 function TopicCard({
   topic,
   rank,
+  selected,
+  onToggleSelect,
   onCategoryClick,
 }: {
   topic: HotTopic;
   rank: number;
+  selected: boolean;
+  onToggleSelect: () => void;
   onCategoryClick: (cat: string) => void;
 }) {
   const isNew = isJustNow(topic.collectedAt);
@@ -132,6 +136,18 @@ function TopicCard({
       )}
 
       <div className="flex items-start gap-4 px-5 py-4 relative z-10">
+        <label
+          className="flex-shrink-0 pt-1 cursor-pointer"
+          title={selected ? '取消选择' : '选择此热点进行 AI 分析'}
+        >
+          <input
+            type="checkbox"
+            checked={selected}
+            onChange={onToggleSelect}
+            className="h-4 w-4 rounded border-cyber-border/60 bg-black/40 text-cyber-cyan focus:ring-cyber-cyan/40 focus:ring-offset-0 cursor-pointer accent-[#00e5ff]"
+          />
+        </label>
+
         {/* Rank */}
         <div className="flex-shrink-0 w-7 pt-0.5 text-right">
           <span
@@ -245,10 +261,19 @@ const ALL_CATEGORIES = [
   '国际资讯', '时事新闻', '社会热点',
 ];
 
+/** 路由切换后保留列表，避免 Dashboard 卸载再挂载时黑屏/全屏 loading */
+const dashboardCache = {
+  topics: [] as HotTopic[],
+  totalCount: 0,
+  loaded: false,
+};
+
 export default function Dashboard() {
-  const [topics, setTopics] = useState<HotTopic[]>([]);
+  const [topics, setTopics] = useState<HotTopic[]>(() => dashboardCache.topics);
+  const hasLoadedOnce = useRef(dashboardCache.loaded);
+  const fetchAbortRef = useRef<AbortController | null>(null);
   const [_config, setConfig] = useState<SystemConfig | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => !dashboardCache.loaded);
   const [refreshing, setRefreshing] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -263,6 +288,8 @@ export default function Dashboard() {
   const [searching, setSearching] = useState(false);
   const [searchStatus, setSearchStatus] = useState<{ source: string; ok: boolean; count: number; error?: string }[] | null>(null);
   const [wsConnected, setWsConnected] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
+  const [analysisHint, setAnalysisHint] = useState<string | null>(null);
 
   // Silent refresh — only shows full loading spinner on initial load
   const silentRefresh = useCallback(async () => {
@@ -280,6 +307,8 @@ export default function Dashboard() {
       const topicsRes = await api.getHotTopics(params);
       setTopics(topicsRes?.topics || []);
       setTotalCount(topicsRes?.meta?.total || 0);
+      dashboardCache.topics = topicsRes?.topics || [];
+      dashboardCache.totalCount = topicsRes?.meta?.total || 0;
     } catch {
       // keep old data on silent refresh failure
     } finally {
@@ -287,23 +316,35 @@ export default function Dashboard() {
     }
   }, [page, sortBy, sortOrder, sourceFilter, categoryFilter, searchQuery]);
 
-  useWebSocket({
-    onConnect: () => setWsConnected(true),
-    onNewTopic: () => silentRefresh(),
-    onTopicsUpdated: () => silentRefresh(),
-    onAnalysisComplete: () => {
-      setAnalyzing(false);
-      silentRefresh();
+  useWebSocket(
+    {
+      onConnect: () => setWsConnected(true),
+      onDisconnect: () => setWsConnected(false),
+      onNewTopic: () => silentRefresh(),
+      onTopicsUpdated: () => silentRefresh(),
+      onAnalysisComplete: () => {
+        setAnalyzing(false);
+        silentRefresh();
+      },
+      onBatchUpdate: (data) => {
+        const list = data?.topics;
+        if (Array.isArray(list) && list.length > 0) {
+          setTopics(list as HotTopic[]);
+          setTotalCount(data.totalCount ?? list.length);
+        }
+      },
     },
-    onBatchUpdate: (data) => {
-      setTopics(data.topics);
-      setTotalCount(data.totalCount);
-    },
-  });
+    'dashboard'
+  );
 
   const fetchData = useCallback(async () => {
+    fetchAbortRef.current?.abort();
+    const ac = new AbortController();
+    fetchAbortRef.current = ac;
+
+    const showFullLoading = !hasLoadedOnce.current;
     try {
-      setLoading(true);
+      if (showFullLoading) setLoading(true);
       setError(null);
       const params: Record<string, string | number> = {
         page,
@@ -320,22 +361,32 @@ export default function Dashboard() {
         api.getConfig().catch(() => null),
       ]);
 
+      if (ac.signal.aborted) return;
+
       setTopics(topicsRes?.topics || []);
       setTotalCount(topicsRes?.meta?.total || 0);
+      dashboardCache.topics = topicsRes?.topics || [];
+      dashboardCache.totalCount = topicsRes?.meta?.total || 0;
+      dashboardCache.loaded = true;
       if (configRes) setConfig(configRes);
+      hasLoadedOnce.current = true;
     } catch (err: any) {
+      if (ac.signal.aborted) return;
       setError(err.message || 'Failed to load');
     } finally {
-      setLoading(false);
+      if (!ac.signal.aborted) setLoading(false);
     }
   }, [page, sortBy, sortOrder, sourceFilter, categoryFilter, searchQuery]);
 
   useEffect(() => {
     fetchData();
-    // Background polling as fallback when WS is down
+    return () => fetchAbortRef.current?.abort();
+  }, [fetchData]);
+
+  useEffect(() => {
     const interval = setInterval(silentRefresh, 30_000);
     return () => clearInterval(interval);
-  }, [fetchData, silentRefresh]);
+  }, [silentRefresh]);
 
   const handleSearch = async () => {
     const q = searchInput.trim();
@@ -362,21 +413,56 @@ export default function Dashboard() {
   };
 
   const handleAnalyze = async () => {
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0) {
+      setAnalysisHint('请先勾选要分析的热点');
+      return;
+    }
+    if (ids.length > 50) {
+      setAnalysisHint('单次最多分析 50 条，请减少勾选数量');
+      return;
+    }
+
     try {
-      const ids = topics.slice(0, 10).map((t) => t.id);
-      if (ids.length === 0) return;
+      setAnalysisHint(null);
       setAnalyzing(true);
       await api.triggerAnalysis(ids);
-      // WS ai:analysis_complete event will trigger silentRefresh + setAnalyzing(false)
-      // Fallback in case WS isn't connected
       setTimeout(() => {
         setAnalyzing(false);
         silentRefresh();
       }, 30_000);
-    } catch {
+    } catch (err: any) {
       setAnalyzing(false);
+      setAnalysisHint(err.message || 'AI 分析启动失败');
     }
   };
+
+  const toggleSelect = (id: string) => {
+    setAnalysisHint(null);
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const selectAllOnPage = () => {
+    setAnalysisHint(null);
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      topics.forEach((t) => next.add(t.id));
+      return next;
+    });
+  };
+
+  const clearSelection = () => {
+    setAnalysisHint(null);
+    setSelectedIds(new Set());
+  };
+
+  const selectedCount = selectedIds.size;
+  const pageSelectedCount = topics.filter((t) => selectedIds.has(t.id)).length;
 
   const analyzed = topics.filter((t) => t.analysis?.relevanceScore != null);
   const avgScore =
@@ -446,23 +532,34 @@ export default function Dashboard() {
         </div>
 
         {/* AI Analyze button with Moving Border */}
-        <MovingBorder
-          innerClassName="flex items-center gap-2 px-5 py-3 text-sm font-mono font-semibold text-cyber-cyan tracking-wider hover:text-white transition-colors group disabled:opacity-50"
-          onClick={handleAnalyze}
-          disabled={analyzing}
-        >
-          {analyzing ? (
-            <>
-              <RefreshCw size={14} className="animate-spin" />
-              ANALYZING...
-            </>
-          ) : (
-            <>
-              <Zap size={15} className="transition-transform group-hover:rotate-12" />
-              AI ANALYZE
-            </>
+        <div className="flex flex-col items-end gap-2">
+          <MovingBorder
+            innerClassName="flex items-center gap-2 px-5 py-3 text-sm font-mono font-semibold text-cyber-cyan tracking-wider hover:text-white transition-colors group disabled:opacity-50"
+            onClick={handleAnalyze}
+            disabled={analyzing || selectedCount === 0}
+            title={selectedCount === 0 ? '请先勾选要分析的热点' : `分析已选 ${selectedCount} 条热点`}
+          >
+            {analyzing ? (
+              <>
+                <RefreshCw size={14} className="animate-spin" />
+                ANALYZING...
+              </>
+            ) : (
+              <>
+                <Zap size={15} className="transition-transform group-hover:rotate-12" />
+                AI ANALYZE{selectedCount > 0 ? ` (${selectedCount})` : ''}
+              </>
+            )}
+          </MovingBorder>
+          {selectedCount > 0 && (
+            <button
+              onClick={clearSelection}
+              className="font-mono text-[10px] text-cyber-text-dim hover:text-cyber-cyan transition-colors"
+            >
+              清空已选 ({selectedCount})
+            </button>
           )}
-        </MovingBorder>
+        </div>
       </div>
 
       {/* ── Search bar ─────────────────────────────────────────────────────── */}
@@ -600,6 +697,48 @@ export default function Dashboard() {
         </span>
       </div>
 
+      {analysisHint && (
+        <div className="glass-card px-4 py-3 font-mono text-xs text-amber-300 border-amber-400/30 bg-amber-900/10 flex items-center justify-between gap-3">
+          <span>{analysisHint}</span>
+          <button
+            onClick={() => setAnalysisHint(null)}
+            className="text-cyber-text-dim hover:text-cyber-text transition-colors"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
+      {topics.length > 0 && (
+        <div
+          className="flex items-center gap-3 flex-wrap px-4 py-2.5 rounded-xl"
+          style={{ background: 'rgba(168,85,247,0.06)', border: '1px solid rgba(168,85,247,0.18)' }}
+        >
+          <span className="font-mono text-[10px] text-cyber-purple tracking-wider">
+            AI 分析选择
+          </span>
+          <button
+            onClick={selectAllOnPage}
+            className="cyber-btn-secondary px-3 py-1 text-[10px] h-auto"
+          >
+            全选本页 ({topics.length})
+          </button>
+          <button
+            onClick={clearSelection}
+            disabled={selectedCount === 0}
+            className="cyber-btn-secondary px-3 py-1 text-[10px] h-auto disabled:opacity-40"
+          >
+            清空选择
+          </button>
+          <span className="font-mono text-[10px] text-cyber-text-dim ml-auto">
+            已选 {selectedCount} 条
+            {pageSelectedCount > 0 && pageSelectedCount < selectedCount
+              ? `（本页 ${pageSelectedCount} 条）`
+              : ''}
+          </span>
+        </div>
+      )}
+
       {/* ── Topic Feed ─────────────────────────────────────────────────────── */}
       {loading ? (
         <div className="flex items-center justify-center py-32">
@@ -647,6 +786,8 @@ export default function Dashboard() {
                 <TopicCard
                   topic={topic}
                   rank={(page - 1) * 20 + index + 1}
+                  selected={selectedIds.has(topic.id)}
+                  onToggleSelect={() => toggleSelect(topic.id)}
                   onCategoryClick={(cat) => { setCategoryFilter(cat); setPage(1); }}
                 />
               </div>

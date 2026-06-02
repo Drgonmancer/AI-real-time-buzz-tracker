@@ -88,14 +88,21 @@ export const api = {
     });
   },
 
-  getConfig() {
-    return request<SystemConfig>('/config');
+  getConfig(options?: { lite?: boolean }) {
+    const qs = options?.lite ? '?lite=1' : '';
+    return request<SystemConfig>(`/config${qs}`);
   },
 
   updateAiConfig(data: { apiKey?: string; baseUrl?: string; model?: string }) {
     return request<SystemConfig>('/config/ai', {
       method: 'PUT',
       body: JSON.stringify(data),
+    });
+  },
+
+  deleteAiApiKey() {
+    return request<{ aiConfig: SystemConfig['aiConfig']; message: string }>('/config/ai/key', {
+      method: 'DELETE',
     });
   },
 

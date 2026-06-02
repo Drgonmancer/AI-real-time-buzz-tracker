@@ -1,10 +1,16 @@
 import OpenAI from 'openai';
 import { config } from '../config';
 
-const openai = new OpenAI({
-  apiKey: config.deepseek.apiKey,
-  baseURL: config.deepseek.baseUrl,
-});
+function createOpenAIClient(apiKey?: string, baseUrl?: string) {
+  const key = apiKey || config.deepseek.apiKey;
+  if (!key) {
+    throw new Error('未配置 DeepSeek API Key');
+  }
+  return new OpenAI({
+    apiKey: key,
+    baseURL: baseUrl || config.deepseek.baseUrl,
+  });
+}
 
 interface RelevanceInput {
   hotTopic: {
@@ -74,6 +80,7 @@ ${input.userKeywords.join(', ') || '未设置关键词'}
 }`;
 
   try {
+    const openai = createOpenAIClient();
     const completion = await openai.chat.completions.create({
       model: config.deepseek.model,
       messages: [
@@ -128,10 +135,7 @@ export async function testConnection(
   apiKey?: string,
   baseUrl?: string
 ): Promise<{ connected: boolean; latency: number }> {
-  const testClient = new OpenAI({
-    apiKey: apiKey || config.deepseek.apiKey,
-    baseURL: baseUrl || config.deepseek.baseUrl,
-  });
+  const testClient = createOpenAIClient(apiKey, baseUrl);
 
   const startTime = Date.now();
   try {

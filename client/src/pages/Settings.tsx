@@ -1,43 +1,94 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { api } from '../lib/api';
+import {
+  getCachedSettings,
+  invalidateSettingsCache,
+  loadSettingsData,
+} from '../lib/settingsData';
 import type { KeywordGroup, SystemConfig } from '../types';
-import LoadingSpinner from '../components/LoadingSpinner';
+
+function SettingsSkeleton() {
+  return (
+    <div className="relative z-10 space-y-8 animate-pulse">
+      <div className="h-8 w-64 rounded bg-white/5" />
+      <div className="grid grid-cols-1 gap-8 xl:grid-cols-2">
+        <div className="glass-card h-80 rounded-xl bg-white/[0.03]" />
+        <div className="glass-card h-80 rounded-xl bg-white/[0.03]" />
+      </div>
+      <div className="glass-card h-48 rounded-xl bg-white/[0.03]" />
+    </div>
+  );
+}
 
 export default function Settings() {
-  const [config, setConfig] = useState<SystemConfig | null>(null);
-  const [groups, setGroups] = useState<KeywordGroup[]>([]);
-  const [loading, setLoading] = useState(true);
+  const cached = getCachedSettings();
+  const [config, setConfig] = useState<SystemConfig | null>(cached?.config ?? null);
+  const [groups, setGroups] = useState<KeywordGroup[]>(cached?.groups ?? []);
+  const [initialLoading, setInitialLoading] = useState(!cached);
+  const [refreshing, setRefreshing] = useState(false);
 
   const [apiKey, setApiKey] = useState('');
-  const [model, setModel] = useState('');
+  const [model, setModel] = useState(cached?.config.aiConfig.model || '');
   const [testResult, setTestResult] = useState<{ ok: boolean; msg: string } | null>(null);
   const [testing, setTesting] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const [newGroupName, setNewGroupName] = useState('');
   const [newKeywords, setNewKeywords] = useState('');
   const [editingGroup, setEditingGroup] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
 
-  const fetchData = useCallback(async () => {
-    try {
-      setLoading(true);
-      const [cfg, grps] = await Promise.all([
-        api.getConfig(),
-        api.getKeywordGroups(),
-      ]);
-      setConfig(cfg);
-      setGroups(grps);
-      setApiKey('');
-      setModel(cfg.aiConfig.model || '');
-    } catch {
-      // handle silently
-    } finally {
-      setLoading(false);
-    }
+  const abortRef = useRef<AbortController | null>(null);
+
+  const applySnapshot = useCallback((cfg: SystemConfig, grps: KeywordGroup[]) => {
+    setConfig(cfg);
+    setGroups(grps);
+    setModel(cfg.aiConfig.model || '');
   }, []);
 
-  useEffect(() => { fetchData(); }, [fetchData]);
+  const refresh = useCallback(
+    async (opts?: { force?: boolean; silent?: boolean }) => {
+      const force = opts?.force ?? false;
+      const silent = opts?.silent ?? !!getCachedSettings();
+
+      abortRef.current?.abort();
+      const ac = new AbortController();
+      abortRef.current = ac;
+
+      try {
+        if (!silent) setInitialLoading(true);
+        else setRefreshing(true);
+
+        const { config: cfg, groups: grps } = await loadSettingsData({
+          force,
+          signal: ac.signal,
+        });
+
+        if (ac.signal.aborted) return;
+        applySnapshot(cfg, grps);
+        setApiKey('');
+      } catch (err) {
+        if (ac.signal.aborted) return;
+        if (!config && !groups.length) {
+          setTestResult({ ok: false, msg: '✗ 加载设置失败，请确认后端已启动' });
+        }
+      } finally {
+        if (!ac.signal.aborted) {
+          setInitialLoading(false);
+          setRefreshing(false);
+        }
+      }
+    },
+    [applySnapshot]
+  );
+
+  useEffect(() => {
+    const hasCache = !!getCachedSettings();
+    refresh({ silent: hasCache });
+    return () => abortRef.current?.abort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount only
+  }, []);
 
   const handleTestConnection = async () => {
     setTesting(true);
@@ -55,18 +106,42 @@ export default function Settings() {
   };
 
   const handleSaveAiConfig = async () => {
+    if (!apiKey.trim() && !model.trim()) {
+      setTestResult({ ok: false, msg: '✗ 请输入 API Key 或模型名称后再保存' });
+      return;
+    }
+
     setSaving(true);
     try {
-      const data: any = {};
-      if (apiKey) data.apiKey = apiKey;
-      if (model) data.model = model;
+      const data: Record<string, string> = {};
+      if (apiKey.trim()) data.apiKey = apiKey.trim();
+      if (model.trim()) data.model = model.trim();
       await api.updateAiConfig(data);
-      setTestResult({ ok: true, msg: '✓ AI CONFIG SAVED SUCCESSFULLY' });
-      fetchData();
+      invalidateSettingsCache();
+      setApiKey('');
+      setTestResult({ ok: true, msg: '✓ AI 配置已保存' });
+      await refresh({ force: true, silent: true });
     } catch (err: any) {
-      setTestResult({ ok: false, msg: `✗ SAVE FAILED: ${err.message}` });
+      setTestResult({ ok: false, msg: `✗ 保存失败: ${err.message}` });
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleDeleteApiKey = async () => {
+    if (!window.confirm('确定删除已保存的 API Key？删除后 AI 分析功能将不可用。')) return;
+
+    setDeleting(true);
+    try {
+      await api.deleteAiApiKey();
+      invalidateSettingsCache();
+      setApiKey('');
+      setTestResult({ ok: true, msg: '✓ API Key 已删除' });
+      await refresh({ force: true, silent: true });
+    } catch (err: any) {
+      setTestResult({ ok: false, msg: `✗ 删除失败: ${err.message}` });
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -82,10 +157,11 @@ export default function Settings() {
         setTestResult({ ok: false, msg: '✗ VALIDATION ERROR: At least 1 keyword required' });
         return;
       }
-      await api.createKeywordGroup({ name: newGroupName.trim(), keywords });
+      const created = await api.createKeywordGroup({ name: newGroupName.trim(), keywords });
+      setGroups((prev) => [created, ...prev]);
+      invalidateSettingsCache();
       setNewGroupName('');
       setNewKeywords('');
-      fetchData();
       setTestResult({ ok: true, msg: '✓ KEYWORD GROUP CREATED' });
     } catch (err: any) {
       setTestResult({ ok: false, msg: `✗ CREATION FAILED: ${err.message}` });
@@ -96,7 +172,8 @@ export default function Settings() {
     if (!window.confirm('Delete this keyword group?')) return;
     try {
       await api.deleteKeywordGroup(id);
-      fetchData();
+      setGroups((prev) => prev.filter((g) => g.id !== id));
+      invalidateSettingsCache();
       setTestResult({ ok: true, msg: '✓ GROUP DELETED' });
     } catch (err: any) {
       setTestResult({ ok: false, msg: `✗ DELETE FAILED: ${err.message}` });
@@ -104,66 +181,74 @@ export default function Settings() {
   };
 
   const handleToggleGroup = async (group: KeywordGroup) => {
+    const next = !group.isActive;
+    setGroups((prev) =>
+      prev.map((g) => (g.id === group.id ? { ...g, isActive: next } : g))
+    );
     try {
-      await api.updateKeywordGroup(group.id, { isActive: !group.isActive });
-      fetchData();
+      await api.updateKeywordGroup(group.id, { isActive: next });
+      invalidateSettingsCache();
     } catch (err: any) {
+      setGroups((prev) =>
+        prev.map((g) => (g.id === group.id ? { ...g, isActive: group.isActive } : g))
+      );
       setTestResult({ ok: false, msg: `✗ TOGGLE FAILED: ${err.message}` });
     }
   };
 
   const handleSaveEdit = async (id: string) => {
     try {
-      await api.updateKeywordGroup(id, { name: editName });
+      const updated = await api.updateKeywordGroup(id, { name: editName });
+      setGroups((prev) => prev.map((g) => (g.id === id ? { ...g, name: updated.name } : g)));
       setEditingGroup(null);
-      fetchData();
+      invalidateSettingsCache();
       setTestResult({ ok: true, msg: '✓ GROUP UPDATED' });
     } catch (err: any) {
       setTestResult({ ok: false, msg: `✗ UPDATE FAILED: ${err.message}` });
     }
   };
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center py-32">
-        <LoadingSpinner />
-      </div>
-    );
+  if (initialLoading && !config) {
+    return <SettingsSkeleton />;
   }
 
   return (
     <div className="relative z-10 space-y-8">
-      {/* Scan Line Effect */}
       <div className="scan-line-effect" />
 
-      {/* Header */}
       <div className="space-y-3">
         <div className="flex items-center gap-3">
           <div className="pulse-dot-cyan" />
           <h1 className="font-mono text-2xl font-bold tracking-wider neon-text-purple">
             {'//'} SYSTEM_CONFIG
           </h1>
+          {refreshing && (
+            <span className="font-mono text-[10px] text-cyber-text-muted animate-pulse">
+              SYNCING...
+            </span>
+          )}
         </div>
         <p className="terminal-text pl-5">
           AI model configuration & keyword surveillance parameters v1.0
         </p>
       </div>
 
-      {/* Result Toast */}
       {testResult && (
-        <div className={`glass-card px-6 py-4 font-mono text-sm flex items-center gap-3 ${
-          testResult.ok 
-            ? 'border-cyber-green/40 bg-green-900/10' 
-            : 'border-cyber-red/40 bg-red-900/10'
-        }`}>
+        <div
+          className={`glass-card px-6 py-4 font-mono text-sm flex items-center gap-3 ${
+            testResult.ok
+              ? 'border-cyber-green/40 bg-green-900/10'
+              : 'border-cyber-red/40 bg-red-900/10'
+          }`}
+        >
           <span className={`text-lg ${testResult.ok ? 'text-cyber-green' : 'text-cyber-red'}`}>
             {testResult.ok ? '✓' : '✗'}
           </span>
           <span className={testResult.ok ? 'text-cyber-green' : 'text-cyber-red'}>
             {testResult.msg}
           </span>
-          <button 
-            onClick={() => setTestResult(null)} 
+          <button
+            onClick={() => setTestResult(null)}
             className="ml-auto text-cyber-text-dim hover:text-cyber-text transition-colors"
           >
             ✕
@@ -172,9 +257,7 @@ export default function Settings() {
       )}
 
       <div className="grid grid-cols-1 gap-8 xl:grid-cols-2">
-        {/* AI Configuration Panel */}
         <div className="glass-card-glow p-8 space-y-6">
-          {/* Section Header */}
           <div className="flex items-center gap-3 pb-4 border-b border-cyber-border/50">
             <div className="p-2 rounded-lg bg-cyan-900/20 border border-cyber-cyan/30">
               <svg className="w-5 h-5 text-cyber-cyan" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
@@ -192,44 +275,48 @@ export default function Settings() {
           </div>
 
           <div className="space-y-5">
-            {/* API Key Input */}
             <div className="space-y-2">
-              <label className="terminal-text block">
-                API_CREDENTIALS
-              </label>
+              <label className="terminal-text block">API_CREDENTIALS</label>
               <input
                 type="password"
                 value={apiKey}
                 onChange={(e) => setApiKey(e.target.value)}
-                placeholder="sk-xxxxxxxxxxxxxxxx"
+                placeholder={
+                  config?.aiConfig.apiKeyConfigured
+                    ? `已保存 (${config.aiConfig.apiKeyHint || '••••••••'})，输入新 Key 可覆盖`
+                    : 'sk-xxxxxxxxxxxxxxxx'
+                }
                 className="cyber-input"
               />
+              {config?.aiConfig.apiKeyConfigured && (
+                <p className="font-mono text-[10px] text-cyber-text-dim">
+                  当前已配置: {config.aiConfig.apiKeyHint || '••••••••'}（完整 Key 不会显示）
+                </p>
+              )}
             </div>
 
-            {/* Model Selection */}
             <div className="space-y-2">
-              <label className="terminal-text block">
-                MODEL_IDENTIFIER
-              </label>
+              <label className="terminal-text block">MODEL_IDENTIFIER</label>
               <input
                 type="text"
                 value={model}
                 onChange={(e) => setModel(e.target.value)}
-                placeholder="deepseek-v4-flash"
+                placeholder="deepseek-chat"
                 className="cyber-input"
               />
             </div>
 
-            {/* Status Display */}
             {config && (
               <div className="rounded-xl border border-cyber-border/50 bg-gradient-to-br from-white/[0.02] to-transparent p-5 space-y-3 backdrop-blur-sm">
                 <div className="flex items-center justify-between">
                   <span className="terminal-text">CONNECTION_STATUS</span>
-                  <span className={`font-mono text-xs font-bold px-3 py-1 rounded-lg ${
-                    config.aiConfig.apiKeyStatus === 'valid' 
-                      ? 'bg-green-900/30 text-cyber-green border border-green-500/30' 
-                      : 'bg-red-900/30 text-cyber-red border border-red-500/30'
-                  }`}>
+                  <span
+                    className={`font-mono text-xs font-bold px-3 py-1 rounded-lg ${
+                      config.aiConfig.apiKeyStatus === 'valid'
+                        ? 'bg-green-900/30 text-cyber-green border border-green-500/30'
+                        : 'bg-red-900/30 text-cyber-red border border-red-500/30'
+                    }`}
+                  >
                     {config.aiConfig.apiKeyStatus?.toUpperCase() || 'UNKNOWN'}
                   </span>
                 </div>
@@ -248,47 +335,46 @@ export default function Settings() {
                   </div>
                 </div>
 
-                {/* Progress Bar */}
                 <div className="w-full h-2 bg-cyber-border/30 rounded-full overflow-hidden">
-                  <div 
+                  <div
                     className="h-full bg-gradient-to-r from-cyber-cyan to-cyber-purple rounded-full transition-all duration-500"
-                    style={{ width: `${Math.min((config.aiConfig.dailyUsage / config.aiConfig.dailyLimit) * 100, 100)}%` }}
+                    style={{
+                      width: `${Math.min((config.aiConfig.dailyUsage / config.aiConfig.dailyLimit) * 100, 100)}%`,
+                    }}
                   />
                 </div>
               </div>
             )}
 
-            {/* Action Buttons */}
-            <div className="flex gap-3 pt-2">
-              <button 
-                onClick={handleTestConnection} 
-                disabled={testing} 
-                className="cyber-btn-primary flex-1 text-xs disabled:opacity-50"
+            <div className="flex flex-wrap gap-3 pt-2">
+              <button
+                onClick={handleTestConnection}
+                disabled={testing || deleting}
+                className="cyber-btn-primary flex-1 min-w-[140px] text-xs disabled:opacity-50"
               >
-                {testing ? (
-                  <>
-                    <svg className="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                    </svg>
-                    TESTING...
-                  </>
-                ) : '⟳ TEST CONNECTION'}
+                {testing ? 'TESTING...' : '⟳ TEST CONNECTION'}
               </button>
-              <button 
-                onClick={handleSaveAiConfig} 
-                disabled={saving} 
-                className="cyber-btn-secondary flex-1 text-xs disabled:opacity-50"
+              <button
+                onClick={handleSaveAiConfig}
+                disabled={saving || deleting}
+                className="cyber-btn-secondary flex-1 min-w-[140px] text-xs disabled:opacity-50"
               >
                 {saving ? '↻ SAVING...' : '💾 SAVE CONFIG'}
               </button>
+              {config?.aiConfig.apiKeyConfigured && (
+                <button
+                  onClick={handleDeleteApiKey}
+                  disabled={deleting || saving || testing}
+                  className="cyber-btn-secondary flex-1 min-w-[140px] text-xs text-cyber-red border-red-500/30 disabled:opacity-50"
+                >
+                  {deleting ? 'DELETING...' : '🗑 DELETE API KEY'}
+                </button>
+              )}
             </div>
           </div>
         </div>
 
-        {/* Data Sources Status Panel */}
         <div className="glass-card p-8 space-y-6">
-          {/* Section Header */}
           <div className="flex items-center gap-3 pb-4 border-b border-cyber-border/50">
             <div className="p-2 rounded-lg bg-pink-900/20 border border-cyber-pink/30">
               <svg className="w-5 h-5 text-cyber-pink" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
@@ -307,40 +393,37 @@ export default function Settings() {
 
           <div className="space-y-3">
             {config?.dataSources.map((ds, idx) => (
-              <div 
-                key={ds.name} 
-                className="group flex items-center justify-between rounded-xl border border-cyber-border/50 bg-gradient-to-r from-white/[0.01] to-transparent px-5 py-4 hover:border-cyber-pink/30 transition-all duration-300 hover-lift"
-                style={{ animationDelay: `${idx * 0.05}s` }}
+              <div
+                key={ds.name}
+                className="group flex items-center justify-between rounded-xl border border-cyber-border/50 bg-gradient-to-r from-white/[0.01] to-transparent px-5 py-4 hover:border-cyber-pink/30 transition-all duration-300"
               >
                 <div className="flex items-center gap-3">
-                  <div className={`relative h-3 w-3 rounded-full ${
-                    ds.status === 'active' ? 'bg-cyber-green' :
-                    ds.status === 'error' ? 'bg-cyber-red animate-pulse' :
-                    'bg-cyber-text-muted'
-                  }`}>
-                    {(ds.status === 'active') && (
+                  <div
+                    className={`relative h-3 w-3 rounded-full ${
+                      ds.status === 'active'
+                        ? 'bg-cyber-green'
+                        : ds.status === 'error'
+                          ? 'bg-cyber-red animate-pulse'
+                          : 'bg-cyber-text-muted'
+                    }`}
+                  >
+                    {ds.status === 'active' && (
                       <span className="absolute inset-0 rounded-full bg-cyber-green animate-ping opacity-40" />
                     )}
                   </div>
-                  
-                  <div className="space-y-0.5">
-                    <span className="font-mono text-sm font-bold text-cyber-text tracking-wider block">
-                      {ds.name.toUpperCase()}
-                    </span>
-                    <span className="font-mono text-[9px] text-cyber-text-muted uppercase tracking-widest">
-                      Source #{idx + 1}
-                    </span>
-                  </div>
+                  <span className="font-mono text-sm font-bold text-cyber-text tracking-wider">
+                    {ds.name.toUpperCase()}
+                  </span>
                 </div>
-
-                <div className={`font-mono text-[10px] font-bold px-3 py-1.5 rounded-lg tracking-wider ${
-                  ds.enabled 
-                    ? (ds.status === 'active' 
-                        ? 'bg-green-900/20 text-cyber-green border border-green-500/30' 
+                <div
+                  className={`font-mono text-[10px] font-bold px-3 py-1.5 rounded-lg ${
+                    ds.enabled
+                      ? ds.status === 'active'
+                        ? 'bg-green-900/20 text-cyber-green border border-green-500/30'
                         : 'bg-red-900/20 text-cyber-red border border-red-500/30'
-                      )
-                    : 'bg-gray-800/30 text-cyber-text-muted border border-cyber-border/50'
-                }`}>
+                      : 'bg-gray-800/30 text-cyber-text-muted border border-cyber-border/50'
+                  }`}
+                >
                   [{ds.enabled ? ds.status.toUpperCase() : 'DISABLED'}]
                 </div>
               </div>
@@ -349,9 +432,7 @@ export default function Settings() {
         </div>
       </div>
 
-      {/* Keywords Management Section */}
       <div className="glass-card-glow p-8 space-y-6">
-        {/* Section Header */}
         <div className="flex items-center justify-between pb-4 border-b border-cyber-border/50">
           <div className="flex items-center gap-3">
             <div className="p-2 rounded-lg bg-purple-900/20 border border-cyber-purple/30">
@@ -363,29 +444,15 @@ export default function Settings() {
               <h2 className="font-mono text-sm font-bold tracking-wider text-cyber-purple neon-text-purple">
                 {'{'} KEYWORD_GROUPS {'}'}
               </h2>
-              <p className="font-mono text-[10px] text-cyber-text-dim mt-0.5">
-                Surveillance Target Configuration
-              </p>
             </div>
           </div>
-
           <div className="glass-card px-4 py-2">
-            <span className="font-mono text-xs text-cyber-cyan neon-text-cyan">
-              {groups.length}
-            </span>
+            <span className="font-mono text-xs text-cyber-cyan neon-text-cyan">{groups.length}</span>
             <span className="font-mono text-[10px] text-cyber-text-dim ml-2">GROUPS</span>
           </div>
         </div>
 
-        {/* Create New Group */}
-        <div className="rounded-2xl border border-cyber-cyan/20 bg-gradient-to-br from-cyan-900/10 to-transparent p-6 space-y-4 backdrop-blur-sm">
-          <div className="flex items-center gap-2 mb-3">
-            <div className="pulse-dot-cyan" />
-            <span className="font-mono text-xs font-bold text-cyber-cyan tracking-wider">
-              NEW_GROUP_CREATION
-            </span>
-          </div>
-
+        <div className="rounded-2xl border border-cyber-cyan/20 bg-gradient-to-br from-cyan-900/10 to-transparent p-6 space-y-4">
           <div className="grid grid-cols-12 gap-3">
             <input
               type="text"
@@ -398,53 +465,34 @@ export default function Settings() {
               type="text"
               value={newKeywords}
               onChange={(e) => setNewKeywords(e.target.value)}
-              placeholder="keyword1, keyword2, keyword3..."
+              placeholder="keyword1, keyword2..."
               className="cyber-input col-span-7"
             />
-            <button 
-              onClick={handleCreateGroup} 
-              className="cyber-btn-primary col-span-2 text-xs"
-            >
+            <button onClick={handleCreateGroup} className="cyber-btn-primary col-span-2 text-xs">
               + CREATE
             </button>
           </div>
-
-          <p className="terminal-text text-[11px]">
-            // Enter group identifier and comma-separated target keywords for AI monitoring
-          </p>
         </div>
 
-        {/* Groups List */}
         <div className="space-y-3">
           {groups.length === 0 ? (
-            <div className="py-16 text-center space-y-3">
-              <div className="inline-flex p-4 rounded-full bg-cyber-surface/50 border border-cyber-border/50">
-                <svg className="w-8 h-8 text-cyber-text-muted opacity-50" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" />
-                </svg>
-              </div>
-              <div>
-                <p className="font-mono text-sm text-cyber-text-dim">NO_KEYWORD_GROUPS_DETECTED</p>
-                <p className="terminal-text mt-2">Create your first surveillance target group above</p>
-              </div>
-            </div>
+            <p className="font-mono text-sm text-cyber-text-dim text-center py-8">
+              NO_KEYWORD_GROUPS_DETECTED
+            </p>
           ) : (
             groups.map((group, idx) => (
-              <div 
-                key={group.id} 
-                className="group/card rounded-2xl border border-cyber-border/40 bg-gradient-to-r from-white/[0.01] to-transparent p-6 hover:border-cyber-purple/30 transition-all duration-300"
-                style={{ animationDelay: `${idx * 0.08}s` }}
+              <div
+                key={group.id}
+                className="rounded-2xl border border-cyber-border/40 bg-gradient-to-r from-white/[0.01] to-transparent p-6"
               >
                 <div className="flex items-start justify-between gap-4">
                   <div className="flex-1 space-y-3 min-w-0">
-                    {/* Group Header */}
-                    <div className="flex items-center gap-3">
-                      <span className="font-mono text-[9px] text-cyber-text-muted tabular-nums">
+                    <div className="flex items-center gap-3 flex-wrap">
+                      <span className="font-mono text-[9px] text-cyber-text-muted">
                         #{String(idx + 1).padStart(2, '0')}
                       </span>
-                      
                       {editingGroup === group.id ? (
-                        <div className="flex items-center gap-2 flex-1">
+                        <>
                           <input
                             type="text"
                             value={editName}
@@ -452,94 +500,69 @@ export default function Settings() {
                             className="cyber-input py-2 text-xs flex-1 max-w-xs"
                             autoFocus
                           />
-                          <button 
-                            onClick={() => handleSaveEdit(group.id)} 
+                          <button
+                            onClick={() => handleSaveEdit(group.id)}
                             className="cyber-btn-primary text-[10px] px-4 py-2"
                           >
                             ✓ SAVE
                           </button>
-                          <button 
-                            onClick={() => setEditingGroup(null)} 
+                          <button
+                            onClick={() => setEditingGroup(null)}
                             className="cyber-btn-secondary text-[10px] px-4 py-2"
                           >
                             ✕ CANCEL
                           </button>
-                        </div>
+                        </>
                       ) : (
                         <>
-                          <span className="font-mono text-base font-bold text-cyber-text group-hover/card:text-cyber-purple transition-colors">
+                          <span className="font-mono text-base font-bold text-cyber-text">
                             {group.name}
                           </span>
-                          
-                          <div className="flex items-center gap-2">
-                            <span className="cyber-badge text-cyber-purple border-purple-500/30 bg-purple-900/10 text-[10px]">
-                              W:{group.weight}
-                            </span>
-                            
-                            <span className={`font-mono text-[9px] px-2 py-0.5 rounded-md tracking-wider ${
-                              group.isActive 
-                                ? 'bg-green-900/20 text-cyber-green border border-green-500/30' 
+                          <span
+                            className={`font-mono text-[9px] px-2 py-0.5 rounded-md ${
+                              group.isActive
+                                ? 'bg-green-900/20 text-cyber-green border border-green-500/30'
                                 : 'bg-gray-800/30 text-cyber-text-muted border border-cyber-border/50'
-                            }`}>
-                              {group.isActive ? '● ACTIVE' : '○ INACTIVE'}
-                            </span>
-                          </div>
+                            }`}
+                          >
+                            {group.isActive ? '● ACTIVE' : '○ INACTIVE'}
+                          </span>
                         </>
                       )}
                     </div>
-
-                    {/* Keywords Tags */}
-                    <div className="flex flex-wrap gap-2 pt-2">
+                    <div className="flex flex-wrap gap-2">
                       {group.keywords.map((kw) => (
-                        <span 
-                          key={kw.id} 
-                          className="px-3 py-1.5 rounded-lg border border-cyber-purple/25 bg-purple-900/15 font-mono text-[11px] text-cyber-purple font-medium hover:border-cyber-purple/50 hover:bg-purple-900/25 transition-all cursor-default"
+                        <span
+                          key={kw.id}
+                          className="px-3 py-1.5 rounded-lg border border-cyber-purple/25 bg-purple-900/15 font-mono text-[11px] text-cyber-purple"
                         >
                           {kw.word}
                         </span>
                       ))}
                     </div>
                   </div>
-
-                  {/* Action Buttons */}
                   {editingGroup !== group.id && (
                     <div className="flex items-center gap-2 shrink-0">
                       <button
-                        onClick={() => { setEditingGroup(group.id); setEditName(group.name); }}
-                        className="p-2 rounded-lg border border-cyber-border/50 text-cyber-text-dim hover:text-cyber-cyan hover:border-cyber-cyan/30 hover:bg-cyber-cyan/5 transition-all"
-                        title="Edit Group"
+                        onClick={() => {
+                          setEditingGroup(group.id);
+                          setEditName(group.name);
+                        }}
+                        className="p-2 rounded-lg border border-cyber-border/50 text-cyber-text-dim hover:text-cyber-cyan"
                       >
-                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                        </svg>
+                        ✎
                       </button>
-                      
                       <button
                         onClick={() => handleToggleGroup(group)}
-                        className={`p-2 rounded-lg border transition-all ${
-                          group.isActive
-                            ? 'border-green-500/30 text-cyber-green hover:bg-green-900/20'
-                            : 'border-cyber-border/50 text-cyber-text-dim hover:text-cyber-text hover:bg-cyber-surface/50'
-                        }`}
-                        title={group.isActive ? 'Deactivate' : 'Activate'}
+                        className="p-2 rounded-lg border border-cyber-border/50 text-cyber-text-dim"
                       >
-                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                          {group.isActive ? (
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
-                          ) : (
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M14.828 14.828a4 4 0 01-5.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                          )}
-                        </svg>
+                        {group.isActive ? '⏸' : '▶'}
                       </button>
-                      
                       <button
                         onClick={() => handleDeleteGroup(group.id)}
-                        className="p-2 rounded-lg border border-red-500/20 text-cyber-red hover:bg-red-900/20 transition-all"
-                        title="Delete Group"
+                        className="p-2 rounded-lg border border-red-500/20 text-cyber-red"
                       >
-                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                        </svg>
+                        🗑
                       </button>
                     </div>
                   )}

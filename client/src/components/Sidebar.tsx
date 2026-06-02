@@ -1,5 +1,6 @@
 import { NavLink } from 'react-router-dom';
 import { useState, useEffect } from 'react';
+import { prefetchSettings } from '../lib/settingsData';
 
 export default function Sidebar() {
   const [glitchActive, setGlitchActive] = useState(false);
@@ -166,6 +167,8 @@ export default function Sidebar() {
 
           <NavLink
             to="/settings"
+            onMouseEnter={prefetchSettings}
+            onFocus={prefetchSettings}
             className={({ isActive }) => `
               group relative flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium
               transition-all duration-300 ease-out

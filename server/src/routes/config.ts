@@ -2,25 +2,42 @@ import { Router, Request, Response } from 'express';
 import { config } from '../config';
 import prisma from '../lib/prisma';
 import { testConnection } from '../services/aiService';
+import {
+  clearStoredApiKey,
+  getAiConfigSnapshot,
+  saveAiConfig,
+} from '../services/aiConfigService';
 
 export const configRouter = Router();
 
 configRouter.get('/', async (req: Request, res: Response) => {
   try {
-    const totalTopics = await prisma.hotTopic.count();
-    const todayTopics = await prisma.hotTopic.count({
-      where: {
-        collectedAt: {
-          gte: new Date(new Date().setHours(0, 0, 0, 0)),
-        },
-      },
-    });
+    const lite =
+      req.query.lite === '1' ||
+      req.query.lite === 'true' ||
+      req.query.lite === 'settings';
 
-    const analyzedCount = await prisma.aiAnalysis.count();
-    const analysisRate =
-      totalTopics > 0 ? ((analyzedCount / totalTopics) * 100).toFixed(1) : '0';
+    let totalTopics = 0;
+    let todayTopics = 0;
+    let analysisRate = 0;
 
-    const apiKeyStatus = config.deepseek.apiKey ? 'valid' : 'not_configured';
+    if (!lite) {
+      const [total, today, analyzedCount] = await Promise.all([
+        prisma.hotTopic.count(),
+        prisma.hotTopic.count({
+          where: {
+            collectedAt: {
+              gte: new Date(new Date().setHours(0, 0, 0, 0)),
+            },
+          },
+        }),
+        prisma.aiAnalysis.count(),
+      ]);
+      totalTopics = total;
+      todayTopics = today;
+      analysisRate =
+        totalTopics > 0 ? parseFloat(((analyzedCount / totalTopics) * 100).toFixed(1)) : 0;
+    }
 
     res.json({
       success: true,
@@ -41,16 +58,11 @@ configRouter.get('/', async (req: Request, res: Response) => {
           { name: 'gnews_cn',     enabled: config.scraper.enabled, lastSyncAt: null, status: 'active' },
           { name: 'gnews_ai',     enabled: config.scraper.enabled, lastSyncAt: null, status: 'active' },
         ],
-        aiConfig: {
-          model: config.deepseek.model,
-          apiKeyStatus,
-          dailyUsage: 0.35,
-          dailyLimit: config.ai.dailyBudget,
-        },
+        aiConfig: getAiConfigSnapshot(),
         stats: {
           totalTopics,
           todayTopics,
-          aiAnalysisRate: parseFloat(analysisRate),
+          aiAnalysisRate: analysisRate,
         },
       },
     });
@@ -67,18 +79,25 @@ configRouter.put('/ai', async (req: Request, res: Response) => {
   try {
     const { apiKey, baseUrl, model } = req.body;
 
-    if (apiKey) {
-      process.env.DEEPSEEK_API_KEY = apiKey;
-      config.deepseek.apiKey = apiKey;
+    if (!apiKey && !baseUrl && !model) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'VALIDATION_ERROR', message: '请提供要保存的配置项' },
+      });
     }
-    if (baseUrl) {
-      process.env.DEEPSEEK_BASE_URL = baseUrl;
-      config.deepseek.baseUrl = baseUrl;
+
+    if (apiKey !== undefined && typeof apiKey === 'string' && apiKey.trim().length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'VALIDATION_ERROR', message: 'API Key 不能为空，如需删除请使用删除功能' },
+      });
     }
-    if (model) {
-      process.env.DEEPSEEK_MODEL = model;
-      config.deepseek.model = model;
-    }
+
+    await saveAiConfig({
+      apiKey: typeof apiKey === 'string' ? apiKey.trim() : undefined,
+      baseUrl: typeof baseUrl === 'string' ? baseUrl.trim() : undefined,
+      model: typeof model === 'string' ? model.trim() : undefined,
+    });
 
     const totalTopics = await prisma.hotTopic.count();
     const todayTopics = await prisma.hotTopic.count({
@@ -92,12 +111,7 @@ configRouter.put('/ai', async (req: Request, res: Response) => {
     res.json({
       success: true,
       data: {
-        aiConfig: {
-          model: config.deepseek.model,
-          apiKeyStatus: config.deepseek.apiKey ? 'valid' : 'not_configured',
-          dailyUsage: 0.35,
-          dailyLimit: config.ai.dailyBudget,
-        },
+        aiConfig: getAiConfigSnapshot(),
         stats: {
           totalTopics,
           todayTopics,
@@ -109,6 +123,26 @@ configRouter.put('/ai', async (req: Request, res: Response) => {
     res.status(500).json({
       success: false,
       error: { code: 'INTERNAL_ERROR', message: '更新AI配置失败' },
+    });
+  }
+});
+
+configRouter.delete('/ai/key', async (_req: Request, res: Response) => {
+  try {
+    await clearStoredApiKey();
+
+    res.json({
+      success: true,
+      data: {
+        aiConfig: getAiConfigSnapshot(),
+        message: 'API Key 已删除',
+      },
+    });
+  } catch (error) {
+    console.error('[Config] Delete API key failed:', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'INTERNAL_ERROR', message: '删除 API Key 失败' },
     });
   }
 });
